@@ -1,0 +1,27 @@
+Core's payment server listens on a local socket so that a second bitcoin: click
+is routed into the running process. A browser has no equivalent, so the first
+thing a user sees is a modal error dialog. Compile it out on Emscripten.
+
+diff --git a/src/qt/bitcoin.cpp b/src/qt/bitcoin.cpp
+index 92c815f..194dc04 100644
+--- a/src/qt/bitcoin.cpp
++++ b/src/qt/bitcoin.cpp
+@@ -598,7 +598,7 @@ int GuiMain(int argc, char* argv[])
+         }
+         return EXIT_FAILURE;
+     }
+-#ifdef ENABLE_WALLET
++#if defined(ENABLE_WALLET) && !defined(__EMSCRIPTEN__)
+     // Parse URIs on command line
+     PaymentServer::ipcParseCommandLine(argc, argv);
+ #endif
+@@ -610,7 +610,8 @@ int GuiMain(int argc, char* argv[])
+     // Re-initialize translations after changing application name (language in network-specific settings can be different)
+     initTranslations(qtTranslatorBase, qtTranslator, translatorBase, translator);
+ 
+-#ifdef ENABLE_WALLET
++#if defined(ENABLE_WALLET) && !defined(__EMSCRIPTEN__)
++    // The payment server needs a local socket, which has no browser equivalent.
+     /// 8. URI IPC sending
+     // - Do this early as we don't want to bother initializing if we are just calling IPC
+     // - Do this *after* setting up the data directory, as the data directory hash is used in the name

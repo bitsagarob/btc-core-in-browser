@@ -1,9 +1,10 @@
 # bitcoin-core-wasm
 
-Bitcoin Core's real consensus and validation engine, compiled to WebAssembly and
-running in a browser. Not a reimplementation and not a subset: this is
-`libbitcoinkernel` from bitcoin/bitcoin at tag `v31.1`, cross compiled with
-Emscripten, with one upstream patch.
+Bitcoin Core compiled to WebAssembly and running in a browser: both the
+validation engine on its own, and `bitcoin-qt`, the full Qt application with its
+node and wallet. Not a reimplementation and not a subset. This is
+bitcoin/bitcoin at tag `v31.1` cross compiled with Emscripten, with three small
+patches, none of which touch consensus, validation or the wallet.
 
 ## What works
 
@@ -32,23 +33,24 @@ is part of it, so treat the ratio as a ceiling, not a benchmark.
 
 ## What does not work yet
 
-* **No persistence.** The demo uses MEMFS, which is gone on reload. LevelDB over
-  OPFS is the next piece of work and is untested.
+* **No persistence.** The filesystem is MEMFS plus an Emscripten preload, both
+  of which are gone on reload. LevelDB over OPFS is the next piece of work and is
+  untested.
+* **Desktop browsers only, and only Chromium is tested.** Firefox and Safari have
+  never been tried. The page refuses to start on a phone before downloading
+  anything.
 * **No networking.** Emscripten's socket emulation needs a WebSocket relay, and
   its better path (`-sPROXY_POSIX_SOCKETS`) requires `-sPROXY_TO_PTHREAD`, which
   Qt does not support. The clean route is a WebSocket backed `Sock`: that class
   is fully virtual and `CreateSock` in `netbase.h` is a swappable
   `std::function`, so no fork of the net layer is needed.
-* **No wallet.** SQLite is not built in.
-* **No GUI.** Core requires Qt 6.2 or newer, and Qt 6 ships prebuilt
-  `wasm_multithread` binaries, so this is reachable, but it is not done here.
-* **Exception catching is off.** Emscripten's default. Real workloads need
-  `-fexceptions` or `-fwasm-exceptions`.
 
 ## Build
 
 Needs `cmake`, `git`, `python3` and system Boost headers. Everything else is
-fetched.
+fetched, including Emscripten and Qt.
+
+The validation engine on its own:
 
 ```sh
 ./build.sh          # browser target, output lands in web/
@@ -57,6 +59,32 @@ fetched.
 ```sh
 ./build.sh node     # Node target, uses NODERAWFS for real filesystem access
 ```
+
+The full application. First mine the chain that gets baked in, then build
+against it, then stage it into a web root with content-hashed filenames:
+
+```sh
+./make-regtest-chain.sh
+```
+
+```sh
+./build-gui.sh build/preload
+```
+
+```sh
+./deploy.sh build/gui/bin /path/to/webroot/bitcoin-core-browser
+```
+
+`make-regtest-chain.sh` also rewrites the tip timestamp inside
+`web-gui/demo-clock.js`. That file is linked with `--pre-js` and shifts the clock
+the module sees to just after the last block: the chain never gains another one,
+and Core's window declares itself out of sync whenever the tip is more than 90
+minutes old. `-maxtipage` does not help, that governs the node's view of initial
+block download while the modal is driven by the GUI's own constant.
+
+Serving it needs `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`, or the browser withholds
+SharedArrayBuffer and the script verification threads never start.
 
 ## Test
 
@@ -76,7 +104,29 @@ To serve the demo by hand instead:
 python3 web/serve.py web
 ```
 
-## Five things that each stopped the build
+## The application build
+
+Beyond everything below, the Qt build needed:
+
+* **Qt 6.11.2 with Emscripten 4.0.7 exactly.** Each Qt minor version targets one
+  Emscripten version. Qt publishes prebuilt `wasm_multithread` binaries, so Qt
+  itself never has to be built from source.
+* **A platform plugin branch.** Qt for WebAssembly ships only `qwasm`, so Core's
+  static plugin list has no `QMinimalIntegrationPlugin` to fall back on.
+* **`-lembind`** and six exported runtime methods that Qt's own build system adds
+  automatically and Core's does not.
+* **`-fexceptions`.** `AppInitMain` calls `std::filesystem::file_size` and catches
+  the throw. With Emscripten's default a throw is an immediate abort, so Core
+  died just after painting its splash screen.
+* **`-sASYNCIFY`.** Core opens modal dialogs with `exec()`, which needs a nested
+  event loop a browser does not have.
+* **`-sDYNAMIC_EXECUTION=0`.** Removes the two `new Function` calls from the glue
+  code, so the page runs under a Content Security Policy with no `'unsafe-eval'`.
+* **The payment server compiled out.** It listens on a local socket to route
+  `bitcoin:` clicks into a running process. Without a socket the user is greeted
+  by an error dialog.
+
+## Five more, from the engine build
 
 Written down because none of them is guessable from the symptom.
 
@@ -101,11 +151,15 @@ Written down because none of them is guessable from the symptom.
 ## Layout
 
 ```
-build.sh                 end to end build
-patches/                 the single upstream patch
+build.sh                 validation engine, browser and node targets
+build-gui.sh             the full Qt application, node and wallet included
+make-regtest-chain.sh    mines the chain that gets baked into the application
+deploy.sh                stages a build into a web root, content-hashed
+patches/                 three patches against Bitcoin Core
 tools/sitecustomize.py   IPv4 pin for emsdk downloads
-web/                     demo page, COOP/COEP server, block fixture
-test/browser_test.py     headless Chromium check
+web/                     validation engine demo page and COOP/COEP server
+web-gui/                 the application's page, loader and clock shim
+test/browser_test.py     headless Chromium check for the validation engine
 ```
 
 ## License

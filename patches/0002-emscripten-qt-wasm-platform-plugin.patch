@@ -1,0 +1,20 @@
+Qt for WebAssembly ships only the wasm platform plugin, so the static-plugin
+import list has no QMinimalIntegrationPlugin to fall back on and the built
+application starts with no platform plugin at all.
+
+diff --git a/src/qt/CMakeLists.txt b/src/qt/CMakeLists.txt
+index 58fa08b..f787a14 100644
+--- a/src/qt/CMakeLists.txt
++++ b/src/qt/CMakeLists.txt
+@@ -16,7 +16,10 @@ get_target_property(qt_lib_type Qt6::Core TYPE)
+ function(import_plugins target)
+   if(qt_lib_type STREQUAL "STATIC_LIBRARY")
+     set(plugins Qt6::QMinimalIntegrationPlugin)
+-    if(CMAKE_SYSTEM_NAME MATCHES "^(Linux|FreeBSD)$")
++    if(EMSCRIPTEN)
++      # Qt for WebAssembly ships only the wasm platform plugin.
++      set(plugins Qt6::QWasmIntegrationPlugin)
++    elseif(CMAKE_SYSTEM_NAME MATCHES "^(Linux|FreeBSD)$")
+       list(APPEND plugins Qt6::QXcbIntegrationPlugin)
+     elseif(WIN32)
+       list(APPEND plugins Qt6::QWindowsIntegrationPlugin Qt6::QModernWindowsStylePlugin)

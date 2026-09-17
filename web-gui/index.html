@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, height=device-height, user-scalable=0">
+<title>Bitcoin Core in your browser</title>
+<meta name="description" content="Bitcoin Core v31.1.0, the real Qt application, compiled to WebAssembly and running in a browser tab with no install. Private test network, no real coins.">
+<link rel="stylesheet" href="boot.css">
+</head>
+<body>
+
+<div id="screen"></div>
+
+<div id="boot">
+  <h1>Starting Bitcoin Core v31.1.0</h1>
+
+  <div class="step pending" id="s-wasm">
+    <div class="step-head"><span class="step-name">Bitcoin Core</span><span class="step-pct"></span></div>
+    <div class="track"><div class="bar"></div></div>
+  </div>
+
+  <div class="step pending" id="s-data">
+    <div class="step-head"><span class="step-name">Block chain and wallet</span><span class="step-pct"></span></div>
+    <div class="track"><div class="bar"></div></div>
+  </div>
+
+  <div class="step pending" id="s-start">
+    <div class="step-head"><span class="step-name">Starting the node</span><span class="step-pct"></span></div>
+    <div class="track"><div class="bar"></div></div>
+  </div>
+
+  <p id="note">Everything runs in this tab. Nothing is sent anywhere. The chain is
+  <code>regtest</code>, a private test network, so the coins are not real and there are no
+  peers to connect to.</p>
+
+  <div id="nomobile">
+    <h2>This one needs a desktop</h2>
+    <p>Bitcoin Core's interface was drawn for a mouse and a big window, and starting it here
+    downloads about 20 MB and holds it all in memory. On a phone it would cost you the
+    download and still be unusable.</p>
+    <p>Open this page on a laptop or desktop instead. Nothing is downloaded until you do.</p>
+    <p><a href="/tools">Back to the tools</a></p>
+  </div>
+
+  <p id="fail"></p>
+</div>
+
+<script src="boot.js"></script>
+
+</body>
+</html>

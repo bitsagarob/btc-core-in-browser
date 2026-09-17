@@ -1,0 +1,32 @@
+html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #07111f; }
+#screen { width: 100%; height: 100%; }
+
+#boot { position: fixed; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 0; color: #f9fbfc;
+        font: 15px/1.6 system-ui, -apple-system, sans-serif; text-align: center;
+        padding: 24px; background: #07111f; z-index: 10; }
+#boot h1 { font-size: 20px; font-weight: 600; margin: 0 0 28px; letter-spacing: -.01em; }
+
+.step { width: min(420px, 86vw); margin-bottom: 18px; text-align: left; }
+.step-head { display: flex; justify-content: space-between; align-items: baseline;
+             font-size: 13px; margin-bottom: 7px; color: rgba(249,251,252,.55); }
+.step-name { color: rgba(249,251,252,.82); }
+.step.pending { opacity: .35; }
+.step.done .step-name::after { content: ' \2713'; color: #6ee7a8; }
+.track { height: 4px; background: rgba(249,251,252,.12); border-radius: 3px; overflow: hidden; }
+.bar { height: 100%; width: 0; background: #d97512; border-radius: 3px;
+       transition: width .15s linear; }
+.bar.indeterminate { width: 40%; animation: slide 1.1s ease-in-out infinite; }
+@keyframes slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+
+#note { max-width: 34rem; margin-top: 18px; color: rgba(249,251,252,.5); font-size: 13.5px; }
+#note code { background: rgba(249,251,252,.09); padding: 1px 5px; border-radius: 4px; }
+#fail { max-width: 34rem; margin-top: 22px; color: #ff8b6b; font-size: 14px; display: none; }
+
+/* Shown instead of the loader on a phone or tablet. */
+#nomobile { display: none; max-width: 26rem; }
+#nomobile h2 { font-size: 19px; margin: 0 0 12px; font-weight: 600; }
+#nomobile p { color: rgba(249,251,252,.62); font-size: 14.5px; margin: 0 0 14px; }
+#nomobile a { color: #f3a13d; }
+body.mobile #boot h1, body.mobile .step, body.mobile #note { display: none; }
+body.mobile #nomobile { display: block; }
