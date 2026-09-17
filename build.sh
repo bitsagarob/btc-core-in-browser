@@ -7,6 +7,11 @@
 # Needs: cmake, a system Boost (headers only), git, python3.
 set -euo pipefail
 
+# Qt's resource compiler stamps the modification time of every file it packs
+# into the binary, including translation files generated during this build. Both
+# rcc and the wider reproducible-builds convention read this.
+export SOURCE_DATE_EPOCH=1231006505
+
 CORE_TAG="v31.1"
 CORE_COMMIT="9be056a8a72b624dae9623b2f7bded92c2a21c91"  # tags move, commits do not
 EMSDK_COMMIT="c59d6e841da55c2c21af32004c4c173cbd1c0f10"
@@ -55,6 +60,11 @@ if [ ! -d "$CORE" ]; then
     echo "$CORE_TAG resolved to $have, expected $CORE_COMMIT"; rm -rf "$CORE.partial"; exit 1; }
   mv "$CORE.partial" "$CORE"
 fi
+
+# Qt's resource compiler embeds the modification time of every file it packs, so
+# two clones made at different moments produce different bytes from identical
+# sources. Pin them, to the timestamp in the genesis block.
+find "$CORE" -exec touch -h -d @1231006505 {} +
 
 # Boost, pinned and fetched, in its own prefix.
 #
