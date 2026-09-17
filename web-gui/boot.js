@@ -10,29 +10,33 @@
   // Same Matomo instance and site id the rest of bitsaga.be uses. This page has
   // no shared footer, so the snippet is repeated here rather than included.
   //
-  // The URLs are same-origin on purpose. This page is served with
-  // Cross-Origin-Embedder-Policy: require-corp, which it needs in order to be
-  // cross-origin isolated, and which blocks any cross-origin subresource that
-  // does not send Cross-Origin-Resource-Policy. analytics.bitsaga.be sends none,
-  // so loading it directly fails silently and nothing is ever recorded. nginx
-  // proxies m.js and m.php to it from this path instead.
+  // /mt.js and /mt.php are bitsaga.be's existing proxy to analytics.bitsaga.be,
+  // added for the SeedSigner simulator, which needs it for the same reason this
+  // page does: both are served with Cross-Origin-Embedder-Policy: require-corp
+  // so that they can be cross-origin isolated, and that blocks any cross-origin
+  // subresource whose server does not send Cross-Origin-Resource-Policy. The
+  // analytics host sends none, so loading it directly fails silently and records
+  // nothing at all. The proxy paths sit at the site root, not under this one, so
+  // a service worker's scope can never intercept a beacon.
+  //
+  // Page views only. Custom events were tried four ways, including flushing the
+  // queue by hand after matomo.js loads and disabling Matomo's own request
+  // buffering, and not one event beacon ever left the page while the page view
+  // landed every single time. Rather than ship code that looks like telemetry
+  // and is not, there is none. The page view answers the only question being
+  // asked of it, which is whether anybody opens this.
   window._paq = window._paq || [];
   var paq = window._paq;
   paq.push(['setDocumentTitle', 'Bitcoin Core in your browser']);
+  paq.push(['setTrackerUrl', '/mt.php']);
+  paq.push(['setSiteId', '1']);
   paq.push(['trackPageView']);
-  paq.push(['enableLinkTracking']);
   (function () {
-    paq.push(['setTrackerUrl', 'm.php']);
-    paq.push(['setSiteId', '1']);
     var d = document, g = d.createElement('script'), s = d.getElementsByTagName('script')[0];
     g.async = true;
-    g.src = 'm.js';
+    g.src = '/mt.js';
     s.parentNode.insertBefore(g, s);
   })();
-
-  function track(action, name) {
-    if (window._paq) window._paq.push(['trackEvent', 'Bitcoin Core wasm', action, name]);
-  }
 
   // ------------------------------------------------------------------ gating
   // A phone cannot usefully run a desktop Qt application, and the download is
@@ -43,7 +47,7 @@
   var touch = navigator.maxTouchPoints > 1;
   if ((coarse && touch) || narrow) {
     document.body.classList.add('mobile');
-    track('Blocked', 'Mobile device');
+    loadMatomo();
     return;
   }
 
@@ -73,12 +77,11 @@
 
   function mb(n) { return (n / 1048576).toFixed(1) + ' MB'; }
 
-  function die(text, reason) {
+  function die(text) {
     fail.style.display = 'block';
     fail.textContent = text;
     var bars = document.querySelectorAll('.bar');
     for (var i = 0; i < bars.length; i++) bars[i].classList.remove('indeterminate');
-    track('Failed', reason || text.slice(0, 60));
   }
 
   var sWasm = step('s-wasm'), sData = step('s-data'), sStart = step('s-start');
@@ -87,7 +90,8 @@
     die('This page is not cross-origin isolated, so the browser withholds SharedArrayBuffer '
       + 'and Bitcoin Core cannot start its script verification threads. The server has to '
       + 'send Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: '
-      + 'require-corp on this path.', 'Not cross-origin isolated');
+      + 'require-corp on this path.');
+    loadMatomo();
     return;
   }
 
@@ -118,8 +122,7 @@
     });
   }
 
-  var started = Date.now();
-  track('Started', navigator.platform || 'unknown');
+  loadMatomo();
 
   fetch('manifest.json')
     .then(function (r) {
@@ -155,23 +158,22 @@
         instantiateWasm: function (imports, successCallback) {
           WebAssembly.instantiate(blobs.wasm, imports).then(function (out) {
             successCallback(out.instance, out.module);
-          }).catch(function (e) { die('WebAssembly failed to start: ' + e, 'Instantiate failed'); });
+          }).catch(function (e) { die('WebAssembly failed to start: ' + e); });
           return {};
         },
         getPreloadedPackage: function () { return blobs.data; },
 
         onRuntimeInitialized: function () {
           sStart.done();
-          track('Running', 'Seconds to start: ' + Math.round((Date.now() - started) / 1000));
           setTimeout(function () { boot.style.display = 'none'; }, 3500);
         },
-        onAbort: function (what) { die('Bitcoin Core stopped: ' + what, 'Aborted'); }
+        onAbort: function (what) { die('Bitcoin Core stopped: ' + what); }
       };
 
       var s = document.createElement('script');
       s.src = blobs.js;
-      s.onerror = function () { die('Could not load ' + blobs.js, 'Glue script failed'); };
+      s.onerror = function () { die('Could not load ' + blobs.js); };
       document.body.appendChild(s);
     })
-    .catch(function (e) { die('Download failed: ' + e.message, 'Download failed'); });
+    .catch(function (e) { die('Download failed: ' + e.message); });
 })();
