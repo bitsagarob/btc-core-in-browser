@@ -47,7 +47,6 @@
   var touch = navigator.maxTouchPoints > 1;
   if ((coarse && touch) || narrow) {
     document.body.classList.add('mobile');
-    loadMatomo();
     return;
   }
 
@@ -91,7 +90,6 @@
       + 'and Bitcoin Core cannot start its script verification threads. The server has to '
       + 'send Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: '
       + 'require-corp on this path.');
-    loadMatomo();
     return;
   }
 
@@ -122,7 +120,6 @@
     });
   }
 
-  loadMatomo();
 
   fetch('manifest.json')
     .then(function (r) {
