@@ -2,3 +2,4 @@ build/
 __pycache__/
 web/bitcoin-chainstate.js
 web/bitcoin-chainstate.wasm
+aqtinstall.log
