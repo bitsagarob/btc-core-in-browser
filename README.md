@@ -1,259 +1,124 @@
 # btc-core-in-browser
 
-Bitcoin Core compiled to WebAssembly and running in a browser: both the
-validation engine on its own, and `bitcoin-qt`, the full Qt application with its
-node and wallet. Not a reimplementation and not a subset. This is
-bitcoin/bitcoin at tag `v31.1` cross compiled with Emscripten, with three small
-patches, none of which touch consensus, validation or the wallet.
+Bitcoin Core compiled to WebAssembly. The real Qt application, its validating
+node and its wallet, running in a browser tab with nothing installed.
 
-## What works
+**Try it: <https://bitsaga.be/bitcoin-core-browser/>** (desktop, about 20 MB)
 
-Headless Chromium, cross-origin isolated, no native helper:
+![Bitcoin Core's wallet overview running in a browser](docs/screenshot.png)
 
-* 330 regtest blocks holding 1831 transactions validated to height 330, exit 0
-* LevelDB block index and chainstate written through Emscripten's filesystem
-* four script verification threads running as web workers
-* the same binary reaches the same tip under Node
+Not a reimplementation and not a subset. This is bitcoin/bitcoin at tag `v31.1`,
+commit `9be056a`, cross compiled with Emscripten, plus three patches that are all
+about the browser lacking something a desktop has. None touches consensus,
+validation or the wallet.
 
-A native `bitcoind` v31.1.0 then opened the datadir the WebAssembly build had
-written and reported the identical best block hash, so the on-disk format is the
-same in both directions.
+## What runs
 
-## Measured
+Real Qt widgets and menus, real LevelDB, real secp256k1, script verification on
+four threads backed by web workers. The chain is regtest and comes baked in.
+
+A native `bitcoind` opened the datadir the WebAssembly build wrote and reported
+the same best block hash, so the on-disk format is identical in both directions.
 
 | | |
 |---|---|
-| Chromium, 330 blocks / 1831 tx | 0.66 s |
-| Node, same binary | 0.73 s |
+| Chromium, 330 blocks / 1831 transactions | 0.66 s |
 | native x86-64, same input | 0.24 s |
-| `bitcoin-chainstate.wasm` | 2.4 MB |
+| `bitcoin-qt.wasm` | 55 MB, 20 MB over the wire |
 
-About 3x native on this workload. The run is short enough that process startup
-is part of it, so treat the ratio as a ceiling, not a benchmark.
+About 3x native, measured on a run short enough that startup is part of it.
 
-## What does not work yet
+## What does not work
 
-* **No persistence.** The filesystem is MEMFS plus an Emscripten preload, both
-  of which are gone on reload. LevelDB over OPFS is the next piece of work and is
-  untested.
-* **Desktop browsers only, and only Chromium is tested.** Firefox and Safari have
-  never been tried. The page refuses to start on a phone before downloading
-  anything.
-* **No networking.** Emscripten's socket emulation needs a WebSocket relay, and
-  its better path (`-sPROXY_POSIX_SOCKETS`) requires `-sPROXY_TO_PTHREAD`, which
-  Qt does not support. The clean route is a WebSocket backed `Sock`: that class
-  is fully virtual and `CreateSock` in `netbase.h` is a swappable
-  `std::function`, so no fork of the net layer is needed.
+- **Nothing persists.** The filesystem is in memory. LevelDB over OPFS is the
+  next piece of work.
+- **No peers.** WebAssembly has no raw TCP. Core's `Sock` is fully virtual and
+  `CreateSock` is a swappable `std::function`, so a WebSocket implementation
+  needs no fork of the net layer.
+- **Chromium only, desktop only.** Firefox and Safari are untested. The page
+  refuses to start on a phone before downloading anything.
 
 ## Build
 
-Linux on x86-64, with GNU tools. The scripts use `sha256sum`, `stat -c`, `nproc`
-and GNU `sed -i`, and the Qt host build fetched is `linux_gcc_64`. macOS and BSD
-are not supported and are not close.
-
-Needs `cmake`, `git`, `python3`, `curl` and system Boost headers, plus about
-6 GB free. Everything else is fetched, including Emscripten and Qt.
-
-`FORCE_IPV4=1` is set around the Emscripten and Qt downloads, because their
-downloaders hang rather than fall back on a host with no working IPv6. Set
-`FORCE_IPV4=0` if that is not your situation.
-
-The validation engine on its own:
+Linux on x86-64 with GNU tools, `cmake`, `git`, `python3`, `curl`, about 6 GB
+free. Everything else is fetched and pinned.
 
 ```sh
-./build.sh          # browser target, output lands in web/
+./build-gui.sh                                     # the application
 ```
 
 ```sh
-./build.sh node     # Node target, uses NODERAWFS for real filesystem access
-```
-
-The full application. First mine the chain that gets baked in, then build
-against it, then stage it into a web root with content-hashed filenames:
-
-```sh
-./make-regtest-chain.sh
+./deploy.sh build/gui/bin /path/to/webroot         # stage it, content-hashed
 ```
 
 ```sh
-./build-gui.sh build/preload
+./build.sh                                         # validation engine alone
 ```
-
-```sh
-./deploy.sh build/gui/bin /path/to/webroot/bitcoin-core-browser
-```
-
-`make-regtest-chain.sh` also rewrites the tip timestamp inside
-`web-gui/demo-clock.js`. That file is linked with `--pre-js` and shifts the clock
-the module sees to just after the last block: the chain never gains another one,
-and Core's window declares itself out of sync whenever the tip is more than 90
-minutes old. `-maxtipage` does not help, that governs the node's view of initial
-block download while the modal is driven by the GUI's own constant.
 
 Serving it needs `Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp`, or the browser withholds
-SharedArrayBuffer and the script verification threads never start.
+SharedArrayBuffer and the verification threads never start. The nginx block that
+sends them is in `infra/nginx/`.
 
-## Test
+## Reproducible
 
-```sh
-python3 -m venv .venv && .venv/bin/pip install -r requirements-test.txt
+Two checkouts at different paths and one fresh clone with an empty build
+directory all produced these:
+
 ```
-
-```sh
-.venv/bin/playwright install chromium
+bitcoin-qt.wasm  8db7dfa9b92e65292a8b0c866563a9e64a14b8cd00d530127fc6327c97999be4
+bitcoin-qt.js    c376263e21bcac5aa43174a2a37f3861d6dd64e149f82ed8398640395ed4f368
+bitcoin-qt.data  85133590af8ebf8bb4df7f40e92ab81e3a63c267738be689349557144f1c6ecf
 ```
-
-The validation engine, which needs only `./build.sh`:
-
-```sh
-.venv/bin/python test/browser_test.py 330
-```
-
-The application, against a directory `deploy.sh` has written:
-
-```sh
-.venv/bin/python test/gui_test.py /path/to/webroot/bitcoin-core-browser
-```
-
-`gui_test.py` checks both halves of the gate: a phone viewport is turned away
-without fetching the 74 MB, and a desktop reaches a running node with no page
-error. It exists because its absence let a page ship that threw before its first
-fetch and sat on an empty progress bar.
-
-Both tests serve with `Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: require-corp`. Both headers are mandatory:
-SharedArrayBuffer is gated on cross-origin isolation, and the script
-verification threads are gated on SharedArrayBuffer. The nginx block that sends
-them in production is kept in `infra/nginx/bitcoin-core-browser.conf`.
-
-To serve the demo by hand instead:
-
-```sh
-python3 web/serve.py web
-```
-
-## The application build
-
-Beyond everything below, the Qt build needed:
-
-* **Qt 6.11.2 with Emscripten 4.0.7 exactly.** Each Qt minor version targets one
-  Emscripten version. Qt publishes prebuilt `wasm_multithread` binaries, so Qt
-  itself never has to be built from source.
-* **A platform plugin branch.** Qt for WebAssembly ships only `qwasm`, so Core's
-  static plugin list has no `QMinimalIntegrationPlugin` to fall back on.
-* **`-lembind`** and six exported runtime methods that Qt's own build system adds
-  automatically and Core's does not.
-* **`-fexceptions`.** `AppInitMain` calls `std::filesystem::file_size` and catches
-  the throw. With Emscripten's default a throw is an immediate abort, so Core
-  died just after painting its splash screen.
-* **`-sASYNCIFY`.** Core opens modal dialogs with `exec()`, which needs a nested
-  event loop a browser does not have.
-* **`-sDYNAMIC_EXECUTION=0`.** Removes the two `new Function` calls from the glue
-  code, so the page runs under a Content Security Policy with no `'unsafe-eval'`.
-* **The payment server compiled out.** It listens on a local socket to route
-  `bitcoin:` clicks into a running process. Without a socket the user is greeted
-  by an error dialog.
-
-## Five more, from the engine build
-
-Written down because none of them is guessable from the symptom.
-
-1. **Boost poisons the include path.** If `find_package(Boost)` resolves to
-   `/usr/include`, the host glibc headers shadow Emscripten's musl and every
-   translation unit fails on `bits/libc-header-start.h`. `build.sh` stages a
-   prefix containing nothing but Boost.
-2. **`HAVE_IFADDRS` is detected, and it crashes.** Emscripten's `getifaddrs`
-   compiles and links, then opens a netlink socket that SOCKFS cannot create, so
-   `RandAddStaticEnv` dies before the first log line. See
-   `patches/0001-emscripten-skip-getifaddrs.patch`.
-3. **`-pthread` must be in `CMAKE_CXX_FLAGS`.** Passed through Core's
-   `APPEND_CXXFLAGS` it arrives after CMake has probed the compiler ABI and
-   pinned the single threaded system libraries, and `wasm-ld` then rejects
-   `--shared-memory` because `cxa_guard.o` has no atomics.
-4. **libevent is not actually required.** It is only looked for when the daemon,
-   GUI, CLI, tests or bench targets are on. `BUILD_UTIL_CHAINSTATE=ON` with the
-   rest off needs no libevent, no Qt and no SQLite.
-5. **emsdk's downloader hangs on IPv6-blackholed hosts.** `tools/sitecustomize.py`
-   pins `getaddrinfo` to IPv4 and `build.sh` puts it on `PYTHONPATH`.
-
-## What is pinned
-
-| Input | Pinned to |
-|---|---|
-| Bitcoin Core | tag `v31.1`, commit `9be056a…`, asserted after clone |
-| Emscripten | SDK 4.0.7, emsdk at commit `c59d6e8…` |
-| Qt | 6.11.2 `wasm_multithread`, via `aqtinstall==3.3.0` |
-| SQLite | amalgamation 3.50.4, SHA256 checked |
-| libevent | `release-2.1.12-stable` |
-| Boost | **the host's headers**, version read from `version.hpp` |
-
-Boost is the one input that floats. Fetching a pinned Boost is the next step if
-byte-for-byte rebuilds matter to you.
-
-## Verifying a deployment
-
-`deploy.sh` writes `build-info.json` next to the artifacts: the SHA256 of each
-served file, the Bitcoin Core commit, and the SHA256 of each patch.
-
-The build deployed at <https://bitsaga.be/bitcoin-core-browser/>:
-
-| File | SHA256 |
-|---|---|
-| `bitcoin-qt.c376263e.js` | `c376263e21bcac5aa43174a2a37f3861d6dd64e149f82ed8398640395ed4f368` |
-| `bitcoin-qt.8db7dfa9.wasm` | `8db7dfa9b92e65292a8b0c866563a9e64a14b8cd00d530127fc6327c97999be4` |
-| `bitcoin-qt.85133590.data` | `85133590af8ebf8bb4df7f40e92ab81e3a63c267738be689349557144f1c6ecf` |
-
-`web/blocks.hex` is the fixture the validation engine test replays. 330 regtest
-blocks, best block hash
-`7b649a78b211e309a8e48a9c43cb495ef2b77d6e5e6dfd4a4b3963d152c06212`,
-SHA256 of the file `f17a1142c276f9c70c81c2a7167e38ed254f6585a285147c03e48806ebcb8fb4`.
-Every block in it is self-verifying: decode the hex and check the work.
-
-**Two builds are byte-identical.** Measured, not assumed: two checkouts at
-different absolute paths on this machine produce the same `bitcoin-qt.wasm`,
-`.js` and `.data`. Verify it yourself:
 
 ```sh
 ./build-gui.sh && sha256sum build/gui/bin/bitcoin-qt.wasm
 ```
 
-and compare against `build-info.json` beside the deployed files. What it took:
+`build-info.json` is deployed beside the artifacts with the same hashes, the
+Core commit and the hash of each patch. Pinned: Core by commit, emsdk by commit,
+Qt via `aqtinstall==3.3.0`, SQLite and Boost by SHA256, the regtest chain as
+`fixtures/regtest-chain.tar.gz`.
 
-* the regtest chain pinned as an input rather than mined per build
-* Boost fetched from a pinned release rather than the host's headers
-* `-ffile-prefix-map`, so the checkout path stays out of the binary
-* `SOURCE_DATE_EPOCH`, because Qt's resource compiler stamps the modification
-  time of every file it packs, which was the last 542 differing bytes
-* `gzip -n`, so the compressed copies carry no mtime
+Only two paths on one machine have been compared. A different distro reproducing
+it is unproven.
 
-Not yet proven: that a different distro, or a different kernel, reproduces this.
-Only two paths on one machine have been compared. The inputs are all pinned, so
-there is nothing known to be left, but "nothing known" is not "verified".
+## Test
+
+```sh
+python3 -m venv .venv && .venv/bin/pip install -r requirements-test.txt
+.venv/bin/playwright install chromium
+```
+
+```sh
+.venv/bin/python test/browser_test.py 330                  # validation engine
+.venv/bin/python test/gui_test.py /path/to/webroot         # the application
+```
+
+## Things that cost a day each
+
+- **Boost must live in its own prefix.** Let `find_package` reach
+  `/usr/include` and the host glibc headers shadow Emscripten's musl.
+- **`HAVE_IFADDRS` is detected and then crashes.** Emscripten's `getifaddrs`
+  links, then opens a netlink socket SOCKFS cannot create, killing Core before
+  its first log line. Patch 0001.
+- **`-pthread` belongs in `CMAKE_CXX_FLAGS`.** Later than that and CMake has
+  already pinned the single threaded system libraries.
+- **`-fexceptions`.** `AppInitMain` calls `std::filesystem::file_size` and
+  catches the throw. By default a throw in Emscripten is an immediate abort.
+- **`-sASYNCIFY`.** Core opens modal dialogs with `exec()`, which needs a nested
+  event loop.
+- **`-sDYNAMIC_EXECUTION=0`.** Removes the two `new Function` calls from the
+  glue, so the page needs no `unsafe-eval`.
+- **`SOURCE_DATE_EPOCH`.** Qt's `rcc` stamps the modification time of every file
+  it packs. This was the last 542 differing bytes between two builds.
+- **libevent is only required when the daemon, GUI, CLI or tests are on.**
 
 ## Analytics
 
-`web-gui/boot.js` sends one Matomo page view, and only when the page is served
-from `bitsaga.be`. A clone serving it anywhere else sends nothing. No events, no
-cookies set by this page, nothing about what you do once it is running.
-
-## Layout
-
-```
-LICENSE                  MIT
-build.sh                 validation engine, browser and node targets
-build-gui.sh             the full Qt application, node and wallet included
-make-regtest-chain.sh    mines the chain that gets baked into the application
-deploy.sh                stages a build into a web root, content-hashed
-patches/                 three patches against Bitcoin Core
-tools/sitecustomize.py   IPv4 pin for emsdk downloads
-web/                     validation engine demo page and COOP/COEP server
-web-gui/                 the application's page, loader and clock shim
-infra/nginx/             the vhost block that sends the isolation headers
-test/browser_test.py     headless Chromium check for the validation engine
-test/gui_test.py         headless Chromium check for the application
-```
+`web-gui/boot.js` sends one Matomo page view, and only when served from
+`bitsaga.be`. A clone serving it anywhere else sends nothing.
 
 ## License
 
-Build scripts here are MIT. Bitcoin Core is MIT and is fetched, not vendored.
+MIT. Bitcoin Core is MIT and is fetched, not vendored.
