@@ -194,9 +194,15 @@ byte-for-byte rebuilds matter to you.
 ## Verifying a deployment
 
 `deploy.sh` writes `build-info.json` next to the artifacts: the SHA256 of each
-served file, the Bitcoin Core commit, and the SHA256 of each patch. That gives a
-third party something to check a claim against. It is not yet a reproducible
-build: see below.
+served file, the Bitcoin Core commit, and the SHA256 of each patch.
+
+The build deployed at <https://bitsaga.be/bitcoin-core-browser/>:
+
+| File | SHA256 |
+|---|---|
+| `bitcoin-qt.c376263e.js` | `c376263e21bcac5aa43174a2a37f3861d6dd64e149f82ed8398640395ed4f368` |
+| `bitcoin-qt.8db7dfa9.wasm` | `8db7dfa9b92e65292a8b0c866563a9e64a14b8cd00d530127fc6327c97999be4` |
+| `bitcoin-qt.85133590.data` | `85133590af8ebf8bb4df7f40e92ab81e3a63c267738be689349557144f1c6ecf` |
 
 `web/blocks.hex` is the fixture the validation engine test replays. 330 regtest
 blocks, best block hash
@@ -204,13 +210,26 @@ blocks, best block hash
 SHA256 of the file `f17a1142c276f9c70c81c2a7167e38ed254f6585a285147c03e48806ebcb8fb4`.
 Every block in it is self-verifying: decode the hex and check the work.
 
-**Two builds are not yet byte-identical**, and it would be dishonest to imply
-otherwise. Known causes: the regtest chain is freshly mined by
-`make-regtest-chain.sh` on every run, so the preloaded datadir differs every
-time; Boost comes from the host; and nobody has yet built this twice and
-compared. `-ffile-prefix-map` keeps the checkout path out of the binary, and
-`gzip -n` keeps mtimes out of the compressed copies, so the remaining gaps are
-the inputs rather than the toolchain.
+**Two builds are byte-identical.** Measured, not assumed: two checkouts at
+different absolute paths on this machine produce the same `bitcoin-qt.wasm`,
+`.js` and `.data`. Verify it yourself:
+
+```sh
+./build-gui.sh && sha256sum build/gui/bin/bitcoin-qt.wasm
+```
+
+and compare against `build-info.json` beside the deployed files. What it took:
+
+* the regtest chain pinned as an input rather than mined per build
+* Boost fetched from a pinned release rather than the host's headers
+* `-ffile-prefix-map`, so the checkout path stays out of the binary
+* `SOURCE_DATE_EPOCH`, because Qt's resource compiler stamps the modification
+  time of every file it packs, which was the last 542 differing bytes
+* `gzip -n`, so the compressed copies carry no mtime
+
+Not yet proven: that a different distro, or a different kernel, reproduces this.
+Only two paths on one machine have been compared. The inputs are all pinned, so
+there is nothing known to be left, but "nothing known" is not "verified".
 
 ## Analytics
 
