@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, height=device-height, user-scalable=0">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bitcoin Core in your browser</title>
 <meta name="description" content="Bitcoin Core v31.1.0, the real Qt application, compiled to WebAssembly and running in a browser tab with no install. Private test network, no real coins.">
 <link rel="stylesheet" href="boot.css">
@@ -14,14 +14,19 @@
 <div id="boot">
   <h1>Starting Bitcoin Core v31.1.0</h1>
 
+  <noscript>
+    <p class="nojs">This page runs Bitcoin Core as WebAssembly, which needs JavaScript
+    enabled. Nothing has been downloaded.</p>
+  </noscript>
+
   <div class="step pending" id="s-wasm">
-    <div class="step-head"><span class="step-name">Bitcoin Core</span><span class="step-pct"></span></div>
-    <div class="track"><div class="bar"></div></div>
+    <div class="step-head"><span class="step-name">Bitcoin Core</span><span class="step-pct" aria-live="polite"></span></div>
+    <div class="track"><div class="bar" role="progressbar" aria-label="Bitcoin Core download" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div></div>
   </div>
 
   <div class="step pending" id="s-data">
-    <div class="step-head"><span class="step-name">Block chain and wallet</span><span class="step-pct"></span></div>
-    <div class="track"><div class="bar"></div></div>
+    <div class="step-head"><span class="step-name">Block chain and wallet</span><span class="step-pct" aria-live="polite"></span></div>
+    <div class="track"><div class="bar" role="progressbar" aria-label="Block chain and wallet download" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div></div>
   </div>
 
   <div class="step pending" id="s-start">
@@ -39,10 +44,11 @@
     downloads about 20 MB and holds it all in memory. On a phone it would cost you the
     download and still be unusable.</p>
     <p>Open this page on a laptop or desktop instead. Nothing is downloaded until you do.</p>
-    <p><a href="/tools">Back to the tools</a></p>
+    <p><a href="/tools">Back to the tools</a> &nbsp;·&nbsp;
+    <a href="#anyway" onclick="location.reload()">load it anyway</a></p>
   </div>
 
-  <p id="fail"></p>
+  <p id="fail" role="alert"></p>
 </div>
 
 <script src="boot.js"></script>

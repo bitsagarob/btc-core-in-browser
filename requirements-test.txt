@@ -1,0 +1,4 @@
+# Both browser tests drive headless Chromium through Playwright.
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements-test.txt
+#   .venv/bin/playwright install chromium
+playwright==1.47.0

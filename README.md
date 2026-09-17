@@ -47,8 +47,16 @@ is part of it, so treat the ratio as a ceiling, not a benchmark.
 
 ## Build
 
-Needs `cmake`, `git`, `python3` and system Boost headers. Everything else is
-fetched, including Emscripten and Qt.
+Linux on x86-64, with GNU tools. The scripts use `sha256sum`, `stat -c`, `nproc`
+and GNU `sed -i`, and the Qt host build fetched is `linux_gcc_64`. macOS and BSD
+are not supported and are not close.
+
+Needs `cmake`, `git`, `python3`, `curl` and system Boost headers, plus about
+6 GB free. Everything else is fetched, including Emscripten and Qt.
+
+`FORCE_IPV4=1` is set around the Emscripten and Qt downloads, because their
+downloaders hang rather than fall back on a host with no working IPv6. Set
+`FORCE_IPV4=0` if that is not your situation.
 
 The validation engine on its own:
 
@@ -89,14 +97,35 @@ SharedArrayBuffer and the script verification threads never start.
 ## Test
 
 ```sh
-python3 test/browser_test.py 330
+python3 -m venv .venv && .venv/bin/pip install -r requirements-test.txt
 ```
 
-Serves `web/` with `Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: require-corp`, drives headless Chromium through
-Playwright, and fails unless the run exits 0 at the expected height. Both
-headers are mandatory: SharedArrayBuffer is gated on cross-origin isolation and
-the script verification threads are gated on SharedArrayBuffer.
+```sh
+.venv/bin/playwright install chromium
+```
+
+The validation engine, which needs only `./build.sh`:
+
+```sh
+.venv/bin/python test/browser_test.py 330
+```
+
+The application, against a directory `deploy.sh` has written:
+
+```sh
+.venv/bin/python test/gui_test.py /path/to/webroot/bitcoin-core-browser
+```
+
+`gui_test.py` checks both halves of the gate: a phone viewport is turned away
+without fetching the 74 MB, and a desktop reaches a running node with no page
+error. It exists because its absence let a page ship that threw before its first
+fetch and sat on an empty progress bar.
+
+Both tests serve with `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`. Both headers are mandatory:
+SharedArrayBuffer is gated on cross-origin isolation, and the script
+verification threads are gated on SharedArrayBuffer. The nginx block that sends
+them in production is kept in `infra/nginx/bitcoin-core-browser.conf`.
 
 To serve the demo by hand instead:
 
@@ -148,9 +177,51 @@ Written down because none of them is guessable from the symptom.
 5. **emsdk's downloader hangs on IPv6-blackholed hosts.** `tools/sitecustomize.py`
    pins `getaddrinfo` to IPv4 and `build.sh` puts it on `PYTHONPATH`.
 
+## What is pinned
+
+| Input | Pinned to |
+|---|---|
+| Bitcoin Core | tag `v31.1`, commit `9be056a…`, asserted after clone |
+| Emscripten | SDK 4.0.7, emsdk at commit `c59d6e8…` |
+| Qt | 6.11.2 `wasm_multithread`, via `aqtinstall==3.3.0` |
+| SQLite | amalgamation 3.50.4, SHA256 checked |
+| libevent | `release-2.1.12-stable` |
+| Boost | **the host's headers**, version read from `version.hpp` |
+
+Boost is the one input that floats. Fetching a pinned Boost is the next step if
+byte-for-byte rebuilds matter to you.
+
+## Verifying a deployment
+
+`deploy.sh` writes `build-info.json` next to the artifacts: the SHA256 of each
+served file, the Bitcoin Core commit, and the SHA256 of each patch. That gives a
+third party something to check a claim against. It is not yet a reproducible
+build: see below.
+
+`web/blocks.hex` is the fixture the validation engine test replays. 330 regtest
+blocks, best block hash
+`7b649a78b211e309a8e48a9c43cb495ef2b77d6e5e6dfd4a4b3963d152c06212`,
+SHA256 of the file `f17a1142c276f9c70c81c2a7167e38ed254f6585a285147c03e48806ebcb8fb4`.
+Every block in it is self-verifying: decode the hex and check the work.
+
+**Two builds are not yet byte-identical**, and it would be dishonest to imply
+otherwise. Known causes: the regtest chain is freshly mined by
+`make-regtest-chain.sh` on every run, so the preloaded datadir differs every
+time; Boost comes from the host; and nobody has yet built this twice and
+compared. `-ffile-prefix-map` keeps the checkout path out of the binary, and
+`gzip -n` keeps mtimes out of the compressed copies, so the remaining gaps are
+the inputs rather than the toolchain.
+
+## Analytics
+
+`web-gui/boot.js` sends one Matomo page view, and only when the page is served
+from `bitsaga.be`. A clone serving it anywhere else sends nothing. No events, no
+cookies set by this page, nothing about what you do once it is running.
+
 ## Layout
 
 ```
+LICENSE                  MIT
 build.sh                 validation engine, browser and node targets
 build-gui.sh             the full Qt application, node and wallet included
 make-regtest-chain.sh    mines the chain that gets baked into the application
@@ -159,7 +230,9 @@ patches/                 three patches against Bitcoin Core
 tools/sitecustomize.py   IPv4 pin for emsdk downloads
 web/                     validation engine demo page and COOP/COEP server
 web-gui/                 the application's page, loader and clock shim
+infra/nginx/             the vhost block that sends the isolation headers
 test/browser_test.py     headless Chromium check for the validation engine
+test/gui_test.py         headless Chromium check for the application
 ```
 
 ## License

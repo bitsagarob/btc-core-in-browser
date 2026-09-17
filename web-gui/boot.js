@@ -6,46 +6,37 @@
   var boot = document.getElementById('boot');
   var fail = document.getElementById('fail');
 
-  // ---------------------------------------------------------------- analytics
-  // Same Matomo instance and site id the rest of bitsaga.be uses. This page has
-  // no shared footer, so the snippet is repeated here rather than included.
-  //
-  // /mt.js and /mt.php are bitsaga.be's existing proxy to analytics.bitsaga.be,
-  // added for the SeedSigner simulator, which needs it for the same reason this
-  // page does: both are served with Cross-Origin-Embedder-Policy: require-corp
-  // so that they can be cross-origin isolated, and that blocks any cross-origin
-  // subresource whose server does not send Cross-Origin-Resource-Policy. The
-  // analytics host sends none, so loading it directly fails silently and records
-  // nothing at all. The proxy paths sit at the site root, not under this one, so
-  // a service worker's scope can never intercept a beacon.
-  //
-  // Page views only. Custom events were tried four ways, including flushing the
-  // queue by hand after matomo.js loads and disabling Matomo's own request
-  // buffering, and not one event beacon ever left the page while the page view
-  // landed every single time. Rather than ship code that looks like telemetry
-  // and is not, there is none. The page view answers the only question being
-  // asked of it, which is whether anybody opens this.
-  window._paq = window._paq || [];
-  var paq = window._paq;
-  paq.push(['setDocumentTitle', 'Bitcoin Core in your browser']);
-  paq.push(['setTrackerUrl', '/mt.php']);
-  paq.push(['setSiteId', '1']);
-  paq.push(['trackPageView']);
-  (function () {
-    var d = document, g = d.createElement('script'), s = d.getElementsByTagName('script')[0];
-    g.async = true;
-    g.src = '/mt.js';
-    s.parentNode.insertBefore(g, s);
-  })();
+  // Page view only, through bitsaga.be's same-origin /mt.php proxy: COEP blocks
+  // the analytics host directly, because it sends no Cross-Origin-Resource-Policy.
+  // Nothing is sent when this page is served from anywhere else, so a clone is
+  // silent by default.
+  if (location.hostname === 'bitsaga.be') {
+    window._paq = window._paq || [];
+    window._paq.push(['setDocumentTitle', 'Bitcoin Core in your browser']);
+    window._paq.push(['setTrackerUrl', '/mt.php']);
+    window._paq.push(['setSiteId', '1']);
+    window._paq.push(['trackPageView']);
+    var mt = document.createElement('script');
+    mt.async = true;
+    mt.src = '/mt.js';
+    document.getElementsByTagName('script')[0].parentNode.insertBefore(mt, null);
+  }
 
   // ------------------------------------------------------------------ gating
-  // A phone cannot usefully run a desktop Qt application, and the download is
-  // large enough that starting it anyway would be rude. Decided before any
-  // fetch, so a phone costs nothing.
-  var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
-  var narrow = Math.min(window.screen.width, window.screen.height) < 700;
-  var touch = navigator.maxTouchPoints > 1;
-  if ((coarse && touch) || narrow) {
+  // Decided before any fetch, so a phone costs nothing. All three signals have
+  // to agree: a touchscreen laptop trips two of them, and screen.width is in CSS
+  // pixels, so a 1080p laptop at 200% OS scaling reports 540.
+  function looksLikeAPhone() {
+    if (navigator.userAgentData && typeof navigator.userAgentData.mobile === 'boolean') {
+      return navigator.userAgentData.mobile;
+    }
+    var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    var touch = navigator.maxTouchPoints > 1;
+    var narrow = Math.min(window.screen.width, window.screen.height) < 700;
+    return coarse && touch && narrow;
+  }
+
+  if (looksLikeAPhone() && location.hash !== '#anyway') {
     document.body.classList.add('mobile');
     return;
   }
@@ -60,8 +51,14 @@
       start: function () { el.classList.remove('pending'); },
       spin: function () { this.bar.classList.add('indeterminate'); },
       set: function (loaded, total) {
+        // Once per tenth of a percent. Per chunk is ~3400 layout-triggering
+        // writes on the thread that is about to compile 55 MB of wasm.
+        var pct = total ? (100 * loaded / total).toFixed(1) : '0.0';
+        if (pct === this.last) return;
+        this.last = pct;
         this.bar.classList.remove('indeterminate');
-        this.bar.style.width = (total ? (100 * loaded / total) : 0).toFixed(1) + '%';
+        this.bar.style.width = pct + '%';
+        this.bar.setAttribute('aria-valuenow', pct);
         this.pct.textContent = mb(loaded) + ' / ' + mb(total);
       },
       done: function (label) {
@@ -76,7 +73,10 @@
 
   function mb(n) { return (n / 1048576).toFixed(1) + ' MB'; }
 
-  function die(text) {
+  function die(text, err) {
+    if (err) console.error(err);
+    document.body.classList.add('failed');
+    boot.style.display = 'flex';
     fail.style.display = 'block';
     fail.textContent = text;
     var bars = document.querySelectorAll('.bar');
@@ -101,17 +101,17 @@
       if (!res.ok) throw new Error(url + ' returned ' + res.status);
       var known = total || parseInt(res.headers.get('content-length') || '0', 10);
       if (!known || !res.body) { ui.spin(); return res.arrayBuffer(); }
+      // Written straight into one buffer of the known size. Collecting chunks
+      // and concatenating afterwards doubles peak memory, and the 55 MB
+      // contiguous allocation is the one most likely to fail.
       var reader = res.body.getReader();
-      var chunks = [], received = 0;
+      var out = new Uint8Array(known);
+      var received = 0;
       ui.set(0, known);
       return (function pump() {
         return reader.read().then(function (r) {
-          if (r.done) {
-            var out = new Uint8Array(received), at = 0;
-            for (var i = 0; i < chunks.length; i++) { out.set(chunks[i], at); at += chunks[i].length; }
-            return out.buffer;
-          }
-          chunks.push(r.value);
+          if (r.done) return out.buffer;
+          out.set(r.value, received);
           received += r.value.length;
           ui.set(Math.min(received, known), known);
           return pump();
@@ -150,21 +150,27 @@
         qtContainerElements: [document.getElementById('screen')],
         preRun: [function () { try { FS.mkdir('/data'); } catch (e) {} }],
 
-        // Hand over the bytes already streamed, so nothing is fetched twice and
-        // the content-hashed filenames are the only ones ever requested.
+        // The bytes are handed over and then dropped: Emscripten copies both
+        // into the wasm heap, and holding a second 74 MB for the session is the
+        // difference between working and not on a laptop with other tabs open.
         instantiateWasm: function (imports, successCallback) {
           WebAssembly.instantiate(blobs.wasm, imports).then(function (out) {
+            blobs.wasm = null;
             successCallback(out.instance, out.module);
-          }).catch(function (e) { die('WebAssembly failed to start: ' + e); });
+          }).catch(function (e) { die('WebAssembly failed to start.', e); });
           return {};
         },
-        getPreloadedPackage: function () { return blobs.data; },
+        getPreloadedPackage: function () {
+          var d = blobs.data;
+          blobs.data = null;
+          return d;
+        },
 
         onRuntimeInitialized: function () {
           sStart.done();
           setTimeout(function () { boot.style.display = 'none'; }, 3500);
         },
-        onAbort: function (what) { die('Bitcoin Core stopped: ' + what); }
+        onAbort: function (what) { die('Bitcoin Core stopped: ' + what, what); }
       };
 
       var s = document.createElement('script');
@@ -172,5 +178,5 @@
       s.onerror = function () { die('Could not load ' + blobs.js); };
       document.body.appendChild(s);
     })
-    .catch(function (e) { die('Download failed: ' + e.message); });
+    .catch(function (e) { die('Could not start: ' + e.message, e); });
 })();

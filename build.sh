@@ -7,41 +7,69 @@
 # Needs: cmake, a system Boost (headers only), git, python3.
 set -euo pipefail
 
-CORE_TAG="${CORE_TAG:-v31.1}"
-EMSDK_VERSION="${EMSDK_VERSION:-4.0.7}"
+CORE_TAG="v31.1"
+CORE_COMMIT="9be056a8a72b624dae9623b2f7bded92c2a21c91"  # tags move, commits do not
+EMSDK_COMMIT="c59d6e841da55c2c21af32004c4c173cbd1c0f10"
+EMSDK_VERSION="4.0.7"
 TARGET="${1:-web}"
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$ROOT/build"
 EMSDK="${EMSDK:-$BUILD/emsdk}"
+case "$ROOT" in
+  *" "*) echo "a path with a space in it breaks the Emscripten link line"; exit 1 ;;
+esac
 mkdir -p "$BUILD"
 
 # ---------------------------------------------------------------- emsdk
 if [ ! -x "$EMSDK/upstream/emscripten/emcc" ]; then
   echo "==> installing emsdk $EMSDK_VERSION"
-  [ -d "$EMSDK" ] || git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$EMSDK"
+  if [ ! -d "$EMSDK" ]; then
+    git clone https://github.com/emscripten-core/emsdk.git "$EMSDK.partial"
+    git -C "$EMSDK.partial" checkout -q "$EMSDK_COMMIT"
+    mv "$EMSDK.partial" "$EMSDK"
+  fi
   # PYTHONPATH shim forces IPv4; emsdk's downloader hangs on IPv6-blackholed hosts.
-  PYTHONPATH="$ROOT/tools" "$EMSDK/emsdk" install "$EMSDK_VERSION"
-  PYTHONPATH="$ROOT/tools" "$EMSDK/emsdk" activate "$EMSDK_VERSION"
+  FORCE_IPV4="${FORCE_IPV4:-1}" PYTHONPATH="$ROOT/tools" "$EMSDK/emsdk" install "$EMSDK_VERSION"
+  FORCE_IPV4="${FORCE_IPV4:-1}" PYTHONPATH="$ROOT/tools" "$EMSDK/emsdk" activate "$EMSDK_VERSION"
 fi
 # shellcheck disable=SC1091
-source "$EMSDK/emsdk_env.sh" >/dev/null 2>&1
+source "$EMSDK/emsdk_env.sh" >/dev/null
 
 # ---------------------------------------------------------------- source
 CORE="$BUILD/core"
 if [ ! -d "$CORE" ]; then
   echo "==> cloning bitcoin core $CORE_TAG"
-  git clone --depth 1 --branch "$CORE_TAG" https://github.com/bitcoin/bitcoin.git "$CORE"
-  git -C "$CORE" apply "$ROOT/patches/0001-emscripten-skip-getifaddrs.patch"
+  git clone --depth 1 --branch "$CORE_TAG" https://github.com/bitcoin/bitcoin.git "$CORE.partial"
+  # All of them, including the two that only touch src/qt. build-gui.sh shares
+  # this checkout, and applying a different set here left it half patched: the
+  # Qt build then skipped its own patches and produced a bitcoin-qt with no
+  # platform plugin, forty minutes later, with nothing said.
+  for patch in "$ROOT"/patches/*.patch; do
+    git -C "$CORE.partial" apply "$patch"
+  done
+  # Rename last, so an interrupted clone or a failed patch cannot leave a
+  # directory that every later run treats as finished.
+  have="$(git -C "$CORE.partial" rev-parse HEAD)"
+  [ "$have" = "$CORE_COMMIT" ] || {
+    echo "$CORE_TAG resolved to $have, expected $CORE_COMMIT"; rm -rf "$CORE.partial"; exit 1; }
+  mv "$CORE.partial" "$CORE"
 fi
 
-# ------------------------------------------------- boost, in its own prefix
-# Pointing find_package(Boost) at /usr/include puts the host glibc headers
-# ahead of Emscripten's musl, and every translation unit then fails on
-# bits/libc-header-start.h. Give it a prefix containing nothing but boost.
+# Boost, in its own prefix. Pointing find_package at /usr/include puts the host
+# glibc headers ahead of Emscripten's musl and every translation unit fails on
+# bits/libc-header-start.h.
+#
+# The version is read out of version.hpp rather than asserted. Writing a number
+# into the generated BoostConfig.cmake means Core's find_package(Boost 1.74.0)
+# check passes against whatever the host actually has, which on an older distro
+# is a failure two hundred compile errors later.
 BOOST_SRC="${BOOST_SRC:-/usr/include/boost}"
-BOOST_PREFIX="$BUILD/boost-prefix"
-BOOST_VER="${BOOST_VER:-1.83.0}"
+[ -f "$BOOST_SRC/version.hpp" ] || { echo "no Boost headers at $BOOST_SRC"; exit 1; }
+_bv="$(sed -n 's/^#define BOOST_VERSION \([0-9]*\).*/\1/p' "$BOOST_SRC/version.hpp")"
+[ -n "$_bv" ] || { echo "cannot read BOOST_VERSION from $BOOST_SRC/version.hpp"; exit 1; }
+BOOST_VER="$((_bv / 100000)).$((_bv / 100 % 1000)).$((_bv % 100))"
+BOOST_PREFIX="$BUILD/boost-$BOOST_VER"
 if [ ! -d "$BOOST_PREFIX" ]; then
   echo "==> staging boost headers from $BOOST_SRC"
   [ -d "$BOOST_SRC" ] || { echo "boost headers not found at $BOOST_SRC"; exit 1; }
@@ -65,6 +93,11 @@ endif()
 EOF
 fi
 
+# Without these the absolute checkout path ends up in the binary, through Boost
+# header paths among others, so two people building identical inputs in
+# different directories get different bytes.
+MAPFLAGS="-ffile-prefix-map=$BUILD=/build -ffile-prefix-map=$BOOST_PREFIX=/boost"
+
 # ---------------------------------------------------------------- link flags
 COMMON_LD="-sPTHREAD_POOL_SIZE=16 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB"
 COMMON_LD="$COMMON_LD -sINITIAL_MEMORY=134217728 -sSTACK_SIZE=4194304"
@@ -81,7 +114,7 @@ esac
 # system libraries, after which wasm-ld rejects --shared-memory.
 emcmake cmake -B "$OUTDIR" -S "$CORE" \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CXX_FLAGS="-pthread" -DCMAKE_C_FLAGS="-pthread" \
+  -DCMAKE_CXX_FLAGS="-pthread $MAPFLAGS" -DCMAKE_C_FLAGS="-pthread $MAPFLAGS" \
   -DBUILD_BITCOIN_BIN=OFF -DBUILD_DAEMON=OFF -DBUILD_CLI=OFF \
   -DBUILD_TESTS=OFF -DBUILD_TX=OFF -DBUILD_UTIL=OFF -DBUILD_GUI=OFF \
   -DENABLE_WALLET=OFF -DENABLE_IPC=OFF -DENABLE_EXTERNAL_SIGNER=OFF \

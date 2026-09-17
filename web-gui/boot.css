@@ -2,7 +2,7 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
 #screen { width: 100%; height: 100%; }
 
 #boot { position: fixed; inset: 0; display: flex; flex-direction: column;
-        align-items: center; justify-content: center; gap: 0; color: #f9fbfc;
+        align-items: center; justify-content: center; color: #f9fbfc;
         font: 15px/1.6 system-ui, -apple-system, sans-serif; text-align: center;
         padding: 24px; background: #07111f; z-index: 10; }
 #boot h1 { font-size: 20px; font-weight: 600; margin: 0 0 28px; letter-spacing: -.01em; }
@@ -22,6 +22,12 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
 #note { max-width: 34rem; margin-top: 18px; color: rgba(249,251,252,.5); font-size: 13.5px; }
 #note code { background: rgba(249,251,252,.09); padding: 1px 5px; border-radius: 4px; }
 #fail { max-width: 34rem; margin-top: 22px; color: #ff8b6b; font-size: 14px; display: none; }
+.nojs { max-width: 32rem; color: rgba(249,251,252,.75); font-size: 14.5px; }
+
+/* A failure after start-up has to bring the overlay back, or it writes into a
+   hidden element and the user is left looking at a frozen canvas. */
+body.failed #boot h1, body.failed .step, body.failed #note { display: none; }
+body.failed #boot { overflow: auto; }
 
 /* Shown instead of the loader on a phone or tablet. */
 #nomobile { display: none; max-width: 26rem; }

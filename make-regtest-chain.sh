@@ -17,7 +17,27 @@ PER_ROUND="${PER_ROUND:-50}"
 PORT="${PORT:-19998}"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-command -v bitcoind >/dev/null || { echo "bitcoind not on PATH"; exit 1; }
+for tool in bitcoind bitcoin-cli; do
+  command -v "$tool" >/dev/null || { echo "$tool not on PATH"; exit 1; }
+done
+
+# The wasm build opens this datadir. A newer native bitcoind can write a
+# chainstate or a descriptor wallet that an older Core will not read, and the
+# failure then surfaces inside a browser with no log to read.
+WANT="${CORE_TAG:-v31.1}"
+bitcoind -version | head -1 | grep -q "${WANT%.*}" || {
+  echo "native bitcoind is $(bitcoind -version | head -1), expected $WANT"
+  exit 1
+}
+
+# $OUT is about to be removed recursively.
+case "$OUT" in
+  ""|"/"|"$HOME") echo "refusing to write to '$OUT'"; exit 1 ;;
+esac
+if [ -e "$OUT" ] && [ ! -f "$OUT/.made-by-make-regtest-chain" ]; then
+  echo "$OUT exists and was not made by this script, refusing to delete it"
+  exit 1
+fi
 
 TMP="$(mktemp -d)"
 trap 'bitcoin-cli -regtest -datadir="$TMP" -rpcport=$PORT stop >/dev/null 2>&1 || true; sleep 2; rm -rf "$TMP"' EXIT
@@ -25,7 +45,7 @@ trap 'bitcoin-cli -regtest -datadir="$TMP" -rpcport=$PORT stop >/dev/null 2>&1 |
 cli() { bitcoin-cli -regtest -datadir="$TMP" -rpcport="$PORT" "$@"; }
 
 bitcoind -regtest -datadir="$TMP" -listen=0 -rpcport="$PORT" -daemon -fallbackfee=0.0001 >/dev/null
-sleep 4
+cli -rpcwait getblockcount >/dev/null
 cli createwallet bench >/dev/null
 ADDR="$(cli getnewaddress)"
 
@@ -42,18 +62,35 @@ HEIGHT="$(cli getblockcount)"
 TIPHASH="$(cli getbestblockhash)"
 TIPTIME="$(cli getblockheader "$TIPHASH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["time"])')"
 TXCOUNT="$(cli getchaintxstats | python3 -c 'import json,sys; print(json.load(sys.stdin)["txcount"])')"
+# stop is asynchronous, and copying a LevelDB mid-flush bakes a corrupt
+# chainstate into the preload that every visitor then downloads.
+PID="$(cat "$TMP/regtest/bitcoind.pid" 2>/dev/null || true)"
 cli stop >/dev/null
-sleep 3
+if [ -n "$PID" ]; then
+  while kill -0 "$PID" 2>/dev/null; do sleep 0.2; done
+else
+  sleep 5
+fi
 
 rm -rf "$OUT"
 mkdir -p "$(dirname "$OUT")"
 cp -r "$TMP/regtest" "$OUT"
 # Runtime leftovers: the lock stops a second process, the log is noise, and the
 # mempool would be replayed as unconfirmed transactions on first start.
-rm -f "$OUT/.lock" "$OUT/debug.log" "$OUT/mempool.dat" "$OUT"/*.pid
+# Everything below varies per run and means nothing to a node with no network.
+rm -f "$OUT/.lock" "$OUT/debug.log" "$OUT/mempool.dat" "$OUT"/*.pid \
+      "$OUT/peers.dat" "$OUT/anchors.dat" "$OUT/fee_estimates.dat" \
+      "$OUT/blocks/.lock" "$OUT/blocks/index/LOCK" "$OUT/chainstate/LOCK"
+touch "$OUT/.made-by-make-regtest-chain"
 
 ISO="$(python3 -c "import datetime,sys; print(datetime.datetime.fromtimestamp(int(sys.argv[1]), datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))" "$TIPTIME")"
+# A sed that quietly matches nothing would leave the page telling Core the
+# wrong time, which shows up as the out-of-sync modal this shim exists to avoid.
+grep -q "var TIP_MS = Date.parse('" "$ROOT/web-gui/demo-clock.js" || {
+  echo "TIP_MS line not found in web-gui/demo-clock.js"; exit 1; }
 sed -i "s|var TIP_MS = Date.parse('[^']*');|var TIP_MS = Date.parse('$ISO');|" "$ROOT/web-gui/demo-clock.js"
+grep -q "Date.parse('$ISO')" "$ROOT/web-gui/demo-clock.js" || {
+  echo "failed to write the new tip into web-gui/demo-clock.js"; exit 1; }
 
 echo
 echo "height   $HEIGHT"

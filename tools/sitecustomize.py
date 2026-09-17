@@ -1,12 +1,16 @@
-# emsdk's downloader hangs where outbound IPv6 is blackholed. Pin IPv4.
-# Use by putting this directory on PYTHONPATH before running ./emsdk install.
+# Force IPv4 name resolution, for hosts where outbound IPv6 is blackholed.
+#
+# emsdk's downloader and aqtinstall both hang forever rather than falling back,
+# and the symptom looks like a dead mirror. Opt in with FORCE_IPV4=1; the build
+# scripts set it only around those two downloads. Left unconditional this file
+# would break the build on an IPv6-only host, which is the opposite problem.
+import os
 import socket
 
-_orig = socket.getaddrinfo
+if os.environ.get("FORCE_IPV4") == "1":
+    _orig = socket.getaddrinfo
 
+    def getaddrinfo(host, port, family=0, *args, **kwargs):
+        return _orig(host, port, family or socket.AF_INET, *args, **kwargs)
 
-def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-    return _orig(host, port, socket.AF_INET, type, proto, flags)
-
-
-socket.getaddrinfo = getaddrinfo
+    socket.getaddrinfo = getaddrinfo

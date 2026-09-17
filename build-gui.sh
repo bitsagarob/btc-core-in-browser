@@ -11,9 +11,14 @@
 # (about 3 GB) plus the build tree.
 set -euo pipefail
 
-CORE_TAG="${CORE_TAG:-v31.1}"
-EMSDK_VERSION="${EMSDK_VERSION:-4.0.7}"
-QT_VERSION="${QT_VERSION:-6.11.2}"   # Qt pins the Emscripten version it was built against
+CORE_TAG="v31.1"
+CORE_COMMIT="9be056a8a72b624dae9623b2f7bded92c2a21c91"  # tags move, commits do not
+EMSDK_COMMIT="c59d6e841da55c2c21af32004c4c173cbd1c0f10"
+EMSDK_VERSION="4.0.7"
+QT_VERSION="6.11.2"          # each Qt minor targets one Emscripten version, do not move one alone
+AQT_VERSION="3.3.0"
+SQLITE_ZIP_URL="https://sqlite.org/2025/sqlite-amalgamation-3500400.zip"
+SQLITE_ZIP_SHA="1d3049dd0f830a025a53105fc79fd2ab9431aea99e137809d064d8ee8356b032"
 PRELOAD="${1:-}"
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -21,17 +26,24 @@ BUILD="$ROOT/build"
 EMSDK="${EMSDK:-$BUILD/emsdk}"
 QT="${QT:-$BUILD/Qt}"
 PREFIX="$BUILD/prefix-wasm"
+case "$ROOT" in
+  *" "*) echo "a path with a space in it breaks the Emscripten link line"; exit 1 ;;
+esac
 mkdir -p "$BUILD" "$PREFIX/lib" "$PREFIX/include"
 
 # ---------------------------------------------------------------- emsdk
 if [ ! -x "$EMSDK/upstream/emscripten/emcc" ]; then
   echo "==> installing emsdk $EMSDK_VERSION"
-  [ -d "$EMSDK" ] || git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$EMSDK"
-  PYTHONPATH="$ROOT/tools" "$EMSDK/emsdk" install "$EMSDK_VERSION"
-  PYTHONPATH="$ROOT/tools" "$EMSDK/emsdk" activate "$EMSDK_VERSION"
+  if [ ! -d "$EMSDK" ]; then
+    git clone https://github.com/emscripten-core/emsdk.git "$EMSDK.partial"
+    git -C "$EMSDK.partial" checkout -q "$EMSDK_COMMIT"
+    mv "$EMSDK.partial" "$EMSDK"
+  fi
+  FORCE_IPV4="${FORCE_IPV4:-1}" PYTHONPATH="$ROOT/tools" "$EMSDK/emsdk" install "$EMSDK_VERSION"
+  FORCE_IPV4="${FORCE_IPV4:-1}" PYTHONPATH="$ROOT/tools" "$EMSDK/emsdk" activate "$EMSDK_VERSION"
 fi
 # shellcheck disable=SC1091
-source "$EMSDK/emsdk_env.sh" >/dev/null 2>&1
+source "$EMSDK/emsdk_env.sh" >/dev/null
 
 # ------------------------------------------------------------------- Qt
 # Qt publishes prebuilt wasm_multithread binaries, so Qt itself never has to be
@@ -40,9 +52,9 @@ source "$EMSDK/emsdk_env.sh" >/dev/null 2>&1
 if [ ! -d "$QT/$QT_VERSION/wasm_multithread" ]; then
   echo "==> installing Qt $QT_VERSION (host and wasm)"
   [ -d "$BUILD/venv-aqt" ] || python3 -m venv "$BUILD/venv-aqt"
-  "$BUILD/venv-aqt/bin/pip" install -q aqtinstall
-  PYTHONPATH="$ROOT/tools" "$BUILD/venv-aqt/bin/aqt" install-qt linux desktop "$QT_VERSION" linux_gcc_64 -O "$QT"
-  PYTHONPATH="$ROOT/tools" "$BUILD/venv-aqt/bin/aqt" install-qt all_os wasm "$QT_VERSION" wasm_multithread -O "$QT"
+  "$BUILD/venv-aqt/bin/pip" install -q "aqtinstall==$AQT_VERSION"
+  FORCE_IPV4="${FORCE_IPV4:-1}" PYTHONPATH="$ROOT/tools" "$BUILD/venv-aqt/bin/aqt" install-qt linux desktop "$QT_VERSION" linux_gcc_64 -O "$QT"
+  FORCE_IPV4="${FORCE_IPV4:-1}" PYTHONPATH="$ROOT/tools" "$BUILD/venv-aqt/bin/aqt" install-qt all_os wasm "$QT_VERSION" wasm_multithread -O "$QT"
 fi
 QT_WASM="$QT/$QT_VERSION/wasm_multithread"
 QT_HOST="$QT/$QT_VERSION/gcc_64"
@@ -55,7 +67,7 @@ if [ ! -f "$PREFIX/lib/libevent_core.a" ]; then
   [ -d "$BUILD/libevent" ] || git clone --depth 1 --branch release-2.1.12-stable \
     https://github.com/libevent/libevent.git "$BUILD/libevent"
   emcmake cmake -B "$BUILD/build-libevent" -S "$BUILD/libevent" \
-    -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-pthread" \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-pthread $MAPFLAGS" \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" -DEVENT__LIBRARY_TYPE=STATIC \
     -DEVENT__DISABLE_OPENSSL=ON -DEVENT__DISABLE_MBEDTLS=ON \
     -DEVENT__DISABLE_BENCHMARK=ON -DEVENT__DISABLE_TESTS=ON \
@@ -66,11 +78,11 @@ fi
 
 # ---------------------------------------------------------------- sqlite
 # The descriptor wallet needs it. The amalgamation compiles to wasm unchanged.
-SQLITE_ZIP_URL="${SQLITE_ZIP_URL:-https://sqlite.org/2025/sqlite-amalgamation-3500400.zip}"
 if [ ! -f "$PREFIX/lib/libsqlite3.a" ]; then
   echo "==> building sqlite for wasm"
   zip="$BUILD/$(basename "$SQLITE_ZIP_URL")"
-  [ -f "$zip" ] || curl -4 -sSL -o "$zip" "$SQLITE_ZIP_URL"
+  [ -f "$zip" ] || curl -sSL -o "$zip" "$SQLITE_ZIP_URL"
+  echo "$SQLITE_ZIP_SHA  $zip" | sha256sum -c - || { rm -f "$zip"; exit 1; }
   python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$zip" "$BUILD"
   s="$BUILD/$(basename "${zip%.zip}")"
   emcc -O2 -pthread -fexceptions -c "$s/sqlite3.c" -o "$s/sqlite3.o" \
@@ -80,13 +92,20 @@ if [ ! -f "$PREFIX/lib/libsqlite3.a" ]; then
   cp "$s/sqlite3.h" "$s/sqlite3ext.h" "$PREFIX/include/"
 fi
 
-# ----------------------------------------------------------------- boost
-# In its own prefix: pointing find_package at /usr/include puts the host glibc
-# headers ahead of Emscripten's musl and every translation unit fails on
+# Boost, in its own prefix. Pointing find_package at /usr/include puts the host
+# glibc headers ahead of Emscripten's musl and every translation unit fails on
 # bits/libc-header-start.h.
+#
+# The version is read out of version.hpp rather than asserted. Writing a number
+# into the generated BoostConfig.cmake means Core's find_package(Boost 1.74.0)
+# check passes against whatever the host actually has, which on an older distro
+# is a failure two hundred compile errors later.
 BOOST_SRC="${BOOST_SRC:-/usr/include/boost}"
-BOOST_VER="${BOOST_VER:-1.83.0}"
-BOOST_PREFIX="$BUILD/boost-prefix"
+[ -f "$BOOST_SRC/version.hpp" ] || { echo "no Boost headers at $BOOST_SRC"; exit 1; }
+_bv="$(sed -n 's/^#define BOOST_VERSION \([0-9]*\).*/\1/p' "$BOOST_SRC/version.hpp")"
+[ -n "$_bv" ] || { echo "cannot read BOOST_VERSION from $BOOST_SRC/version.hpp"; exit 1; }
+BOOST_VER="$((_bv / 100000)).$((_bv / 100 % 1000)).$((_bv % 100))"
+BOOST_PREFIX="$BUILD/boost-$BOOST_VER"
 if [ ! -d "$BOOST_PREFIX" ]; then
   mkdir -p "$BOOST_PREFIX/include" "$BOOST_PREFIX/lib/cmake/Boost-$BOOST_VER"
   ln -sfn "$BOOST_SRC" "$BOOST_PREFIX/include/boost"
@@ -112,23 +131,24 @@ fi
 CORE="$BUILD/core"
 if [ ! -d "$CORE" ]; then
   echo "==> cloning bitcoin core $CORE_TAG"
-  git clone --depth 1 --branch "$CORE_TAG" https://github.com/bitcoin/bitcoin.git "$CORE"
-  for p in "$ROOT"/patches/*.patch; do
-    echo "    applying $(basename "$p")"
-    git -C "$CORE" apply "$p"
+  git clone --depth 1 --branch "$CORE_TAG" https://github.com/bitcoin/bitcoin.git "$CORE.partial"
+  for patch in "$ROOT"/patches/*.patch; do
+    echo "    applying $(basename "$patch")"
+    git -C "$CORE.partial" apply "$patch"
   done
+  have="$(git -C "$CORE.partial" rev-parse HEAD)"
+  [ "$have" = "$CORE_COMMIT" ] || {
+    echo "$CORE_TAG resolved to $have, expected $CORE_COMMIT"; rm -rf "$CORE.partial"; exit 1; }
+  mv "$CORE.partial" "$CORE"
 fi
 
+# Without these the absolute checkout path ends up in the binary, through Boost
+# header paths among others, so two people building identical inputs in
+# different directories get different bytes.
+MAPFLAGS="-ffile-prefix-map=$BUILD=/build -ffile-prefix-map=$BOOST_PREFIX=/boost"
+
 # ----------------------------------------------------------------- flags
-# -fexceptions: AppInitMain calls std::filesystem::file_size and catches the
-#   throw. With Emscripten's default a throw is an immediate abort.
-# -sASYNCIFY: Core opens modal dialogs with exec(), which needs a nested event
-#   loop that a browser does not have.
-# -sDYNAMIC_EXECUTION=0: removes the two `new Function` calls from the glue, so
-#   the page runs under a Content Security Policy with no 'unsafe-eval'.
-# -pthread has to be in CMAKE_CXX_FLAGS, not APPEND_CXXFLAGS: CMake probes the
-#   compiler ABI at configure time and pins the single-threaded system libraries,
-#   after which wasm-ld rejects --shared-memory.
+# Every flag below is explained in the README, under "The application build".
 LDFLAGS="-sPTHREAD_POOL_SIZE=40 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB"
 LDFLAGS="$LDFLAGS -sINITIAL_MEMORY=268435456 -sSTACK_SIZE=4194304"
 LDFLAGS="$LDFLAGS -sFORCE_FILESYSTEM=1 -sASSERTIONS=0 -sDYNAMIC_EXECUTION=0"
@@ -143,7 +163,7 @@ cmake -B "$OUT" -S "$CORE" \
   -DCMAKE_TOOLCHAIN_FILE="$QT_WASM/lib/cmake/Qt6/qt.toolchain.cmake" \
   -DQT_HOST_PATH="$QT_HOST" \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CXX_FLAGS="-pthread -fexceptions" -DCMAKE_C_FLAGS="-pthread -fexceptions" \
+  -DCMAKE_CXX_FLAGS="-pthread -fexceptions $MAPFLAGS" -DCMAKE_C_FLAGS="-pthread -fexceptions $MAPFLAGS" \
   -DBUILD_GUI=ON -DBUILD_DAEMON=OFF -DBUILD_CLI=OFF -DBUILD_BITCOIN_BIN=OFF \
   -DBUILD_TESTS=OFF -DBUILD_TX=OFF -DBUILD_UTIL=OFF -DBUILD_GUI_TESTS=OFF \
   -DENABLE_WALLET=ON -DENABLE_IPC=OFF -DENABLE_EXTERNAL_SIGNER=OFF \
