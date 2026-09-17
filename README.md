@@ -1,4 +1,4 @@
-# bitcoin-core-wasm
+# btc-core-in-browser
 
 Bitcoin Core compiled to WebAssembly and running in a browser: both the
 validation engine on its own, and `bitcoin-qt`, the full Qt application with its
