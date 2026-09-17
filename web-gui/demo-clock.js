@@ -9,7 +9,7 @@
 //
 // make-regtest-chain.sh rewrites TIP_MS when it mines a new chain.
 (function () {
-  var TIP_MS = Date.parse('2026-09-17T13:22:31Z');
+  var TIP_MS = Date.parse('2026-09-17T19:29:23Z');
   var real = Date.now.bind(Date);
   // Quantised so that a thread starting ten minutes in does not report a clock
   // ten minutes behind the one that started first.

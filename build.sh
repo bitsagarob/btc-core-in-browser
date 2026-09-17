@@ -56,26 +56,27 @@ if [ ! -d "$CORE" ]; then
   mv "$CORE.partial" "$CORE"
 fi
 
-# Boost, in its own prefix. Pointing find_package at /usr/include puts the host
-# glibc headers ahead of Emscripten's musl and every translation unit fails on
-# bits/libc-header-start.h.
+# Boost, pinned and fetched, in its own prefix.
 #
-# The version is read out of version.hpp rather than asserted. Writing a number
-# into the generated BoostConfig.cmake means Core's find_package(Boost 1.74.0)
-# check passes against whatever the host actually has, which on an older distro
-# is a failure two hundred compile errors later.
-BOOST_SRC="${BOOST_SRC:-/usr/include/boost}"
-[ -f "$BOOST_SRC/version.hpp" ] || { echo "no Boost headers at $BOOST_SRC"; exit 1; }
-_bv="$(sed -n 's/^#define BOOST_VERSION \([0-9]*\).*/\1/p' "$BOOST_SRC/version.hpp")"
-[ -n "$_bv" ] || { echo "cannot read BOOST_VERSION from $BOOST_SRC/version.hpp"; exit 1; }
-BOOST_VER="$((_bv / 100000)).$((_bv / 100 % 1000)).$((_bv % 100))"
+# Two reasons it is not the host's headers. Pointing find_package at
+# /usr/include puts the host glibc headers ahead of Emscripten's musl and every
+# translation unit fails on bits/libc-header-start.h. And a build whose headers
+# come from whatever the distro ships cannot produce the same bytes twice on two
+# machines. Only the headers are extracted; nothing here links a Boost library.
+BOOST_VER="1.83.0"
+BOOST_TARBALL_URL="https://archives.boost.io/release/1.83.0/source/boost_1_83_0.tar.gz"
+BOOST_TARBALL_SHA="c0685b68dd44cc46574cce86c4e17c0f611b15e195be9848dfd0769a0a207628"
 BOOST_PREFIX="$BUILD/boost-$BOOST_VER"
 if [ ! -d "$BOOST_PREFIX" ]; then
-  echo "==> staging boost headers from $BOOST_SRC"
-  [ -d "$BOOST_SRC" ] || { echo "boost headers not found at $BOOST_SRC"; exit 1; }
-  mkdir -p "$BOOST_PREFIX/include" "$BOOST_PREFIX/lib/cmake/Boost-$BOOST_VER"
-  ln -sfn "$BOOST_SRC" "$BOOST_PREFIX/include/boost"
-  cat > "$BOOST_PREFIX/lib/cmake/Boost-$BOOST_VER/BoostConfig.cmake" <<EOF
+  echo "==> fetching boost $BOOST_VER"
+  boost_tar="$BUILD/boost.tar.gz"
+  [ -f "$boost_tar" ] || curl -sSL -o "$boost_tar" "$BOOST_TARBALL_URL"
+  echo "$BOOST_TARBALL_SHA  $boost_tar" | sha256sum -c - || { rm -f "$boost_tar"; exit 1; }
+  rm -rf "$BOOST_PREFIX.partial"
+  mkdir -p "$BOOST_PREFIX.partial/include" "$BOOST_PREFIX.partial/lib/cmake/Boost-$BOOST_VER"
+  tar -xzf "$boost_tar" -C "$BOOST_PREFIX.partial/include" --strip-components=1 \
+    "boost_${BOOST_VER//./_}/boost"
+  cat > "$BOOST_PREFIX.partial/lib/cmake/Boost-$BOOST_VER/BoostConfig.cmake" <<EOF
 set(Boost_VERSION $BOOST_VER)
 set(Boost_INCLUDE_DIR "$BOOST_PREFIX/include" CACHE PATH "")
 if(NOT TARGET Boost::headers)
@@ -85,18 +86,14 @@ if(NOT TARGET Boost::headers)
 endif()
 set(Boost_FOUND TRUE)
 EOF
-  cat > "$BOOST_PREFIX/lib/cmake/Boost-$BOOST_VER/BoostConfigVersion.cmake" <<EOF
+  cat > "$BOOST_PREFIX.partial/lib/cmake/Boost-$BOOST_VER/BoostConfigVersion.cmake" <<EOF
 set(PACKAGE_VERSION "$BOOST_VER")
 if(PACKAGE_FIND_VERSION VERSION_LESS_EQUAL PACKAGE_VERSION)
   set(PACKAGE_VERSION_COMPATIBLE TRUE)
 endif()
 EOF
+  mv "$BOOST_PREFIX.partial" "$BOOST_PREFIX"
 fi
-
-# Without these the absolute checkout path ends up in the binary, through Boost
-# header paths among others, so two people building identical inputs in
-# different directories get different bytes.
-MAPFLAGS="-ffile-prefix-map=$BUILD=/build -ffile-prefix-map=$BOOST_PREFIX=/boost"
 
 # ---------------------------------------------------------------- link flags
 COMMON_LD="-sPTHREAD_POOL_SIZE=16 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB"

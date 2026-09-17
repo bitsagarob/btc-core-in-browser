@@ -3,9 +3,10 @@
 #
 #   ./build-gui.sh [path/to/preload-datadir]
 #
-# With a datadir argument, that directory is baked into the binary as an
-# Emscripten preload and mounted at /data/regtest, so the node comes up with a
-# chain and a wallet already present. make-regtest-chain.sh produces one.
+# The datadir is baked into the binary as an Emscripten preload and mounted at
+# /data/regtest, so the node comes up with a chain and a wallet already present.
+# With no argument it unpacks fixtures/regtest-chain.tar.gz, which is the chain
+# the published build ships. Pass a path to use your own.
 #
 # Needs: cmake, git, python3, system Boost headers, and enough disk for Qt
 # (about 3 GB) plus the build tree.
@@ -19,6 +20,7 @@ QT_VERSION="6.11.2"          # each Qt minor targets one Emscripten version, do 
 AQT_VERSION="3.3.0"
 SQLITE_ZIP_URL="https://sqlite.org/2025/sqlite-amalgamation-3500400.zip"
 SQLITE_ZIP_SHA="1d3049dd0f830a025a53105fc79fd2ab9431aea99e137809d064d8ee8356b032"
+CHAIN_SHA="bcafcd8c1d6702bad3db57dc726eaee286cd451d4c391c646c0d5fe43c623c55"
 PRELOAD="${1:-}"
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -67,7 +69,7 @@ if [ ! -f "$PREFIX/lib/libevent_core.a" ]; then
   [ -d "$BUILD/libevent" ] || git clone --depth 1 --branch release-2.1.12-stable \
     https://github.com/libevent/libevent.git "$BUILD/libevent"
   emcmake cmake -B "$BUILD/build-libevent" -S "$BUILD/libevent" \
-    -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-pthread $MAPFLAGS" \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-pthread -ffile-prefix-map=$BUILD=/build" \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" -DEVENT__LIBRARY_TYPE=STATIC \
     -DEVENT__DISABLE_OPENSSL=ON -DEVENT__DISABLE_MBEDTLS=ON \
     -DEVENT__DISABLE_BENCHMARK=ON -DEVENT__DISABLE_TESTS=ON \
@@ -85,31 +87,34 @@ if [ ! -f "$PREFIX/lib/libsqlite3.a" ]; then
   echo "$SQLITE_ZIP_SHA  $zip" | sha256sum -c - || { rm -f "$zip"; exit 1; }
   python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$zip" "$BUILD"
   s="$BUILD/$(basename "${zip%.zip}")"
-  emcc -O2 -pthread -fexceptions -c "$s/sqlite3.c" -o "$s/sqlite3.o" \
+  emcc -O2 -pthread -fexceptions -ffile-prefix-map="$BUILD=/build" -c "$s/sqlite3.c" -o "$s/sqlite3.o" \
     -DSQLITE_OMIT_LOAD_EXTENSION=1 -DSQLITE_THREADSAFE=1 \
     -DSQLITE_ENABLE_COLUMN_METADATA=1 -DSQLITE_DISABLE_DIRSYNC=1
   emar rcs "$PREFIX/lib/libsqlite3.a" "$s/sqlite3.o"
   cp "$s/sqlite3.h" "$s/sqlite3ext.h" "$PREFIX/include/"
 fi
 
-# Boost, in its own prefix. Pointing find_package at /usr/include puts the host
-# glibc headers ahead of Emscripten's musl and every translation unit fails on
-# bits/libc-header-start.h.
+# Boost, pinned and fetched, in its own prefix.
 #
-# The version is read out of version.hpp rather than asserted. Writing a number
-# into the generated BoostConfig.cmake means Core's find_package(Boost 1.74.0)
-# check passes against whatever the host actually has, which on an older distro
-# is a failure two hundred compile errors later.
-BOOST_SRC="${BOOST_SRC:-/usr/include/boost}"
-[ -f "$BOOST_SRC/version.hpp" ] || { echo "no Boost headers at $BOOST_SRC"; exit 1; }
-_bv="$(sed -n 's/^#define BOOST_VERSION \([0-9]*\).*/\1/p' "$BOOST_SRC/version.hpp")"
-[ -n "$_bv" ] || { echo "cannot read BOOST_VERSION from $BOOST_SRC/version.hpp"; exit 1; }
-BOOST_VER="$((_bv / 100000)).$((_bv / 100 % 1000)).$((_bv % 100))"
+# Two reasons it is not the host's headers. Pointing find_package at
+# /usr/include puts the host glibc headers ahead of Emscripten's musl and every
+# translation unit fails on bits/libc-header-start.h. And a build whose headers
+# come from whatever the distro ships cannot produce the same bytes twice on two
+# machines. Only the headers are extracted; nothing here links a Boost library.
+BOOST_VER="1.83.0"
+BOOST_TARBALL_URL="https://archives.boost.io/release/1.83.0/source/boost_1_83_0.tar.gz"
+BOOST_TARBALL_SHA="c0685b68dd44cc46574cce86c4e17c0f611b15e195be9848dfd0769a0a207628"
 BOOST_PREFIX="$BUILD/boost-$BOOST_VER"
 if [ ! -d "$BOOST_PREFIX" ]; then
-  mkdir -p "$BOOST_PREFIX/include" "$BOOST_PREFIX/lib/cmake/Boost-$BOOST_VER"
-  ln -sfn "$BOOST_SRC" "$BOOST_PREFIX/include/boost"
-  cat > "$BOOST_PREFIX/lib/cmake/Boost-$BOOST_VER/BoostConfig.cmake" <<EOF
+  echo "==> fetching boost $BOOST_VER"
+  boost_tar="$BUILD/boost.tar.gz"
+  [ -f "$boost_tar" ] || curl -sSL -o "$boost_tar" "$BOOST_TARBALL_URL"
+  echo "$BOOST_TARBALL_SHA  $boost_tar" | sha256sum -c - || { rm -f "$boost_tar"; exit 1; }
+  rm -rf "$BOOST_PREFIX.partial"
+  mkdir -p "$BOOST_PREFIX.partial/include" "$BOOST_PREFIX.partial/lib/cmake/Boost-$BOOST_VER"
+  tar -xzf "$boost_tar" -C "$BOOST_PREFIX.partial/include" --strip-components=1 \
+    "boost_${BOOST_VER//./_}/boost"
+  cat > "$BOOST_PREFIX.partial/lib/cmake/Boost-$BOOST_VER/BoostConfig.cmake" <<EOF
 set(Boost_VERSION $BOOST_VER)
 set(Boost_INCLUDE_DIR "$BOOST_PREFIX/include" CACHE PATH "")
 if(NOT TARGET Boost::headers)
@@ -119,12 +124,31 @@ if(NOT TARGET Boost::headers)
 endif()
 set(Boost_FOUND TRUE)
 EOF
-  cat > "$BOOST_PREFIX/lib/cmake/Boost-$BOOST_VER/BoostConfigVersion.cmake" <<EOF
+  cat > "$BOOST_PREFIX.partial/lib/cmake/Boost-$BOOST_VER/BoostConfigVersion.cmake" <<EOF
 set(PACKAGE_VERSION "$BOOST_VER")
 if(PACKAGE_FIND_VERSION VERSION_LESS_EQUAL PACKAGE_VERSION)
   set(PACKAGE_VERSION_COMPATIBLE TRUE)
 endif()
 EOF
+  mv "$BOOST_PREFIX.partial" "$BOOST_PREFIX"
+fi
+
+# ----------------------------------------------------------------- chain
+# The regtest chain baked into the binary is an input, not an output. Mining a
+# fresh one on every build would mean no two builds could ever produce the same
+# bytes: new wallet keys, new block timestamps, a new block-file obfuscation
+# key. fixtures/regtest-chain.tar.gz is that chain, and web-gui/demo-clock.js
+# agrees with its tip. make-regtest-chain.sh regenerates both together.
+if [ -z "$PRELOAD" ]; then
+  PRELOAD="$BUILD/preload"
+  if [ ! -d "$PRELOAD" ]; then
+    echo "==> unpacking the pinned regtest chain"
+    echo "$CHAIN_SHA  $ROOT/fixtures/regtest-chain.tar.gz" | sha256sum -c - || exit 1
+    rm -rf "$BUILD/preload.partial"
+    mkdir -p "$BUILD/preload.partial"
+    tar -xzf "$ROOT/fixtures/regtest-chain.tar.gz" -C "$BUILD/preload.partial" --strip-components=1
+    mv "$BUILD/preload.partial" "$PRELOAD"
+  fi
 fi
 
 # ------------------------------------------------------------------ core
@@ -156,7 +180,7 @@ LDFLAGS="$LDFLAGS -sASYNCIFY=1 -sASYNCIFY_STACK_SIZE=131072 -fexceptions"
 LDFLAGS="$LDFLAGS --pre-js $ROOT/web-gui/demo-clock.js -lembind"
 LDFLAGS="$LDFLAGS -sEXPORTED_RUNTIME_METHODS=UTF16ToString,stringToUTF16,JSEvents,specialHTMLTargets,FS,callMain"
 LDFLAGS="$LDFLAGS -sEXPORTED_FUNCTIONS=_main,__embind_initialize_bindings"
-[ -n "$PRELOAD" ] && LDFLAGS="$LDFLAGS --preload-file $(cd "$PRELOAD" && pwd)@/data/regtest"
+LDFLAGS="$LDFLAGS --preload-file $(cd "$PRELOAD" && pwd)@/data/regtest"
 
 OUT="$BUILD/gui"
 cmake -B "$OUT" -S "$CORE" \

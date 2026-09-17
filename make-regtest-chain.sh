@@ -97,4 +97,16 @@ echo "height   $HEIGHT"
 echo "txcount  $TXCOUNT"
 echo "tip      $ISO"
 echo "datadir  $OUT  ($(du -sh "$OUT" | cut -f1))"
-echo "demo-clock.js updated to the new tip"
+# The chain is a build input, so it is repacked here rather than left lying in
+# a build directory. Deterministic flags: a tarball that differs only by mtime
+# would defeat the point of pinning it.
+FIXTURE="$ROOT/fixtures/regtest-chain.tar.gz"
+mkdir -p "$ROOT/fixtures"
+tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+    -cf - -C "$(dirname "$OUT")" "$(basename "$OUT")" | gzip -9 -n > "$FIXTURE"
+SHA="$(sha256sum "$FIXTURE" | cut -d" " -f1)"
+sed -i "s|^CHAIN_SHA=\".*\"|CHAIN_SHA=\"$SHA\"|" "$ROOT/build-gui.sh"
+
+echo "fixture $FIXTURE"
+echo "sha256   $SHA"
+echo "demo-clock.js and build-gui.sh updated to the new chain"
