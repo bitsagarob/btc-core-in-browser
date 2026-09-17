@@ -9,18 +9,24 @@
   // ---------------------------------------------------------------- analytics
   // Same Matomo instance and site id the rest of bitsaga.be uses. This page has
   // no shared footer, so the snippet is repeated here rather than included.
+  //
+  // The URLs are same-origin on purpose. This page is served with
+  // Cross-Origin-Embedder-Policy: require-corp, which it needs in order to be
+  // cross-origin isolated, and which blocks any cross-origin subresource that
+  // does not send Cross-Origin-Resource-Policy. analytics.bitsaga.be sends none,
+  // so loading it directly fails silently and nothing is ever recorded. nginx
+  // proxies m.js and m.php to it from this path instead.
   window._paq = window._paq || [];
   var paq = window._paq;
   paq.push(['setDocumentTitle', 'Bitcoin Core in your browser']);
   paq.push(['trackPageView']);
   paq.push(['enableLinkTracking']);
   (function () {
-    var u = 'https://analytics.bitsaga.be/';
-    paq.push(['setTrackerUrl', u + 'matomo.php']);
+    paq.push(['setTrackerUrl', 'm.php']);
     paq.push(['setSiteId', '1']);
     var d = document, g = d.createElement('script'), s = d.getElementsByTagName('script')[0];
     g.async = true;
-    g.src = u + 'matomo.js';
+    g.src = 'm.js';
     s.parentNode.insertBefore(g, s);
   })();
 
