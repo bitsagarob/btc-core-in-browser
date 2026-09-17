@@ -1,0 +1,22 @@
+Emscripten provides getifaddrs, so Core's probe succeeds and HAVE_IFADDRS is
+defined, but the implementation opens a netlink socket that SOCKFS cannot
+create. RandAddStaticEnv then crashes before the first log line is written.
+Treat Emscripten as not having ifaddrs.
+
+--- a/cmake/module/TestAppendRequiredLibraries.cmake
++++ b/cmake/module/TestAppendRequiredLibraries.cmake
+@@ -12,6 +12,13 @@ function(test_append_socket_library target)
+   if (NOT TARGET ${target})
+     message(FATAL_ERROR "${CMAKE_CURRENT_FUNCTION}() called with non-existent target \"${target}\".")
+   endif()
+ 
++  # Emscripten's getifaddrs compiles and links, but calls into netlink at
++  # runtime, which SOCKFS cannot provide. Treat it as unavailable.
++  if(EMSCRIPTEN)
++    set(HAVE_IFADDRS FALSE PARENT_SCOPE)
++    return()
++  endif()
++
+   set(check_socket_source "
+     #include <sys/types.h>
+     #include <ifaddrs.h>

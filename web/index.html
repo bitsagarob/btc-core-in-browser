@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Bitcoin Core validation engine in the browser</title>
+<pre id="out">loading...</pre>
+<script>
+window.__done = false; window.__log = []; window.__err = [];
+function log(s){ window.__log.push(s); document.getElementById('out').textContent = window.__log.slice(-40).join("\n"); }
+(async () => {
+  const hex = new Uint8Array(await (await fetch('blocks.hex')).arrayBuffer());
+  let i = 0;
+  window.Module = {
+    arguments: ['-regtest', '/data'],
+    print: (s) => log(s),
+    printErr: (s) => { window.__err.push(s); },
+    preRun: [function(){
+      FS.mkdir('/data');
+      FS.init(function stdin(){ return i < hex.length ? hex[i++] : null; }, null, null);
+    }],
+    onExit: (code) => { window.__exit = code; window.__done = true; },
+    onAbort: (what) => { window.__err.push('ABORT: ' + what); window.__done = true; },
+  };
+  window.__t0 = performance.now();
+  const s = document.createElement('script');
+  s.src = 'bitcoin-chainstate.js';
+  document.body.appendChild(s);
+})();
+</script>
